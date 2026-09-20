@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import TonalClient from "@dlwiest/ts-tonal-client";
 
-console.log("[Tonal Client] Service starting...");
+console.log("[Tonal Client] Diagnostic service starting...");
 
 const optionsPath = "/data/options.json";
 
@@ -20,57 +20,148 @@ if (!email || !password) {
   process.exit(1);
 }
 
+function printSection(title) {
+  console.log("");
+  console.log("==================================================");
+  console.log(`[Tonal Client] ${title}`);
+  console.log("==================================================");
+}
+
+function printData(label, data) {
+  console.log(`[Tonal Client] ${label}:`);
+  console.log(JSON.stringify(data, null, 2));
+}
+
+async function test(name, fn) {
+  printSection(name);
+
+  try {
+    const result = await fn();
+    printData("Result", result);
+    return result;
+  } catch (error) {
+    console.error(
+      `[Tonal Client] ${name} ERROR:`,
+      error instanceof Error ? error.message : String(error)
+    );
+    return null;
+  }
+}
+
 try {
   console.log("[Tonal Client] Authenticating with Tonal...");
 
   const client = await TonalClient.create({
     username: email,
-    password: password,
+    password,
     cacheDir: "/data/cache"
   });
 
   console.log("[Tonal Client] Authentication successful.");
 
-  const user = await client.getUserInfo();
-
-  console.log(
-    `[Tonal Client] User: ${user.firstName ?? "Unknown"}`
+  await test("USER INFO", () =>
+    client.getUserInfo()
   );
 
-  const workouts = await client.getUserWorkouts();
-
-  console.log(
-    `[Tonal Client] Workout templates returned: ${workouts.length}`
+  await test("CURRENT STRENGTH SCORES", () =>
+    client.getCurrentStrengthScores()
   );
 
-  const activities = await client.getAllWorkoutActivities();
-
-  console.log(
-    `[Tonal Client] Completed workout activities returned: ${activities.length}`
+  const strengthHistory = await test("STRENGTH SCORE HISTORY", () =>
+    client.getStrengthScoreHistory()
   );
 
-  if (activities.length > 0) {
-    const sorted = [...activities].sort(
-      (a, b) =>
-        new Date(b.beginTime).getTime() -
-        new Date(a.beginTime).getTime()
-    );
+  await test("USER STATISTICS", () =>
+    client.getUserStatistics()
+  );
+
+  await test("ACHIEVEMENT STATS", () =>
+    client.getAchievementStats()
+  );
+
+  await test("ACHIEVEMENTS", () =>
+    client.getAchievements()
+  );
+
+  await test("MUSCLE READINESS", () =>
+    client.getMuscleReadiness()
+  );
+
+  const activities = await test("COMPLETED WORKOUT ACTIVITIES", () =>
+    client.getAllWorkoutActivities()
+  );
+
+  if (Array.isArray(activities) && activities.length > 0) {
+    const sorted = [...activities].sort((a, b) => {
+      const aTime = new Date(
+        a.beginTime ?? a.begin_time ?? a.startTime ?? 0
+      ).getTime();
+
+      const bTime = new Date(
+        b.beginTime ?? b.begin_time ?? b.startTime ?? 0
+      ).getTime();
+
+      return bTime - aTime;
+    });
 
     const latest = sorted[0];
 
-    console.log("[Tonal Client] Latest completed activity:");
-    console.log(`  Begin: ${latest.beginTime}`);
-    console.log(`  Type: ${latest.workoutType ?? "Unknown"}`);
-    console.log(`  Sets: ${latest.totalSets ?? "Unknown"}`);
-    console.log(`  Reps: ${latest.totalReps ?? "Unknown"}`);
-    console.log(`  Volume: ${latest.totalVolume ?? "Unknown"}`);
+    printSection("LATEST ACTIVITY FROM ACTIVITY LIST");
+    printData("Latest activity", latest);
+
+    const activityId =
+      latest.id ??
+      latest.activityId ??
+      latest.workoutActivityId;
+
+    if (activityId) {
+      await test("LATEST ACTIVITY FULL DETAIL", () =>
+        client.getWorkoutActivityById(activityId)
+      );
+
+      await test("LATEST ACTIVITY FORMATTED SUMMARY", () =>
+        client.getFormattedWorkoutSummary(activityId)
+      );
+    } else {
+      console.log(
+        "[Tonal Client] Could not determine latest activity ID."
+      );
+    }
   }
 
-  console.log("[Tonal Client] Initial test completed successfully.");
+  if (Array.isArray(strengthHistory) && strengthHistory.length > 0) {
+    printSection("STRENGTH HISTORY SUMMARY");
+
+    console.log(
+      `[Tonal Client] Strength history entries: ${strengthHistory.length}`
+    );
+
+    console.log("[Tonal Client] First strength history entry:");
+    console.log(JSON.stringify(strengthHistory[0], null, 2));
+
+    console.log("[Tonal Client] Last strength history entry:");
+    console.log(
+      JSON.stringify(
+        strengthHistory[strengthHistory.length - 1],
+        null,
+        2
+      )
+    );
+  }
+
+  printSection("DIAGNOSTIC COMPLETE");
+
+  console.log(
+    "[Tonal Client] Diagnostics finished. Keeping app alive for log inspection."
+  );
+
+  setInterval(() => {
+    // Keep the Home Assistant app running.
+  }, 60_000);
 
 } catch (error) {
   console.error(
-    "[Tonal Client] ERROR:",
+    "[Tonal Client] FATAL ERROR:",
     error instanceof Error ? error.message : String(error)
   );
 
