@@ -1,0 +1,10 @@
+{
+  "name": "tonal-client-ha-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@dlwiest/ts-tonal-client": "latest",
+    "mqtt": "^5.10.0"
+  }
+}

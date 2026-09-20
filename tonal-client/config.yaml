@@ -1,0 +1,25 @@
+name: "Tonal Client"
+version: "0.1.0"
+slug: "tonal_client"
+description: "Home Assistant app using dlwiest/ts-tonal-client"
+url: "https://github.com/chubban-lgtm/tonal-client-ha-app"
+
+arch:
+  - amd64
+
+init: false
+startup: application
+boot: auto
+
+services:
+  - mqtt:need
+
+options:
+  tonal_email: ""
+  tonal_password: ""
+  sync_interval: 21600
+
+schema:
+  tonal_email: str
+  tonal_password: password
+  sync_interval: "int(300,86400)"
