@@ -2,7 +2,7 @@ import fs from "node:fs";
 import mqtt from "mqtt";
 import TonalClient from "@dlwiest/ts-tonal-client";
 
-console.log("[Tonal Client] Starting permanent service...");
+console.log("[Tonal Client] Starting full Home Assistant service...");
 
 const optionsPath = "/data/options.json";
 
@@ -35,60 +35,35 @@ const DEVICE = {
 };
 
 const MUSCLE_SCORES = [
-  {
-    id: "back_strength_score",
-    name: "Back Strength Score",
-    aliases: ["back"]
-  },
-  {
-    id: "biceps_strength_score",
-    name: "Biceps Strength Score",
-    aliases: ["biceps"]
-  },
-  {
-    id: "chest_strength_score",
-    name: "Chest Strength Score",
-    aliases: ["chest"]
-  },
-  {
-    id: "shoulders_strength_score",
-    name: "Shoulders Strength Score",
-    aliases: ["shoulders", "shoulder"]
-  },
-  {
-    id: "triceps_strength_score",
-    name: "Triceps Strength Score",
-    aliases: ["triceps"]
-  },
-  {
-    id: "abs_strength_score",
-    name: "Abs Strength Score",
-    aliases: ["abs", "abdominals"]
-  },
-  {
-    id: "obliques_strength_score",
-    name: "Obliques Strength Score",
-    aliases: ["obliques"]
-  },
-  {
-    id: "glutes_strength_score",
-    name: "Glutes Strength Score",
-    aliases: ["glutes"]
-  },
-  {
-    id: "hamstrings_strength_score",
-    name: "Hamstrings Strength Score",
-    aliases: ["hamstrings"]
-  },
-  {
-    id: "quads_strength_score",
-    name: "Quads Strength Score",
-    aliases: ["quads", "quadriceps"]
-  }
+  ["back_strength_score", "Back Strength Score", ["back"]],
+  ["biceps_strength_score", "Biceps Strength Score", ["biceps"]],
+  ["chest_strength_score", "Chest Strength Score", ["chest"]],
+  ["shoulders_strength_score", "Shoulders Strength Score", ["shoulders", "shoulder"]],
+  ["triceps_strength_score", "Triceps Strength Score", ["triceps"]],
+  ["abs_strength_score", "Abs Strength Score", ["abs", "abdominals"]],
+  ["obliques_strength_score", "Obliques Strength Score", ["obliques"]],
+  ["glutes_strength_score", "Glutes Strength Score", ["glutes"]],
+  ["hamstrings_strength_score", "Hamstrings Strength Score", ["hamstrings"]],
+  ["quads_strength_score", "Quads Strength Score", ["quads", "quadriceps"]]
+];
+
+const READINESS = [
+  ["chest_readiness", "Chest Readiness", "Chest"],
+  ["shoulders_readiness", "Shoulders Readiness", "Shoulders"],
+  ["back_readiness", "Back Readiness", "Back"],
+  ["triceps_readiness", "Triceps Readiness", "Triceps"],
+  ["biceps_readiness", "Biceps Readiness", "Biceps"],
+  ["abs_readiness", "Abs Readiness", "Abs"],
+  ["obliques_readiness", "Obliques Readiness", "Obliques"],
+  ["quads_readiness", "Quads Readiness", "Quads"],
+  ["glutes_readiness", "Glutes Readiness", "Glutes"],
+  ["hamstrings_readiness", "Hamstrings Readiness", "Hamstrings"],
+  ["calves_readiness", "Calves Readiness", "Calves"]
 ];
 
 let mqttReady = false;
 let tonalClient = null;
+let syncRunning = false;
 
 const mqttClient = mqtt.connect({
   host: mqttHost,
@@ -102,99 +77,49 @@ function publish(topic, payload, retain = true) {
   mqttClient.publish(
     topic,
     typeof payload === "string" ? payload : JSON.stringify(payload),
-    {
-      retain
-    }
+    { retain }
   );
 }
 
 function publishDiscovery(id, config) {
   publish(
     `homeassistant/sensor/tonal_client/${id}/config`,
-    {
+    JSON.stringify({
       unique_id: `tonal_client_${id}`,
       object_id: `tonal_client_${id}`,
       device: DEVICE,
       ...config
-    }
+    })
   );
 }
 
 function publishState(id, value) {
-  publish(
-    `tonal_client/${id}/state`,
-    String(value)
-  );
-}
-
-function createCoreEntities() {
-  publishDiscovery("strength_score", {
-    name: "Strength Score",
-    state_topic: "tonal_client/strength_score/state",
-    icon: "mdi:arm-flex"
-  });
-
-  publishDiscovery("upper_strength_score", {
-    name: "Upper Strength Score",
-    state_topic: "tonal_client/upper_strength_score/state",
-    icon: "mdi:arm-flex"
-  });
-
-  publishDiscovery("core_strength_score", {
-    name: "Core Strength Score",
-    state_topic: "tonal_client/core_strength_score/state",
-    icon: "mdi:human"
-  });
-
-  publishDiscovery("lower_strength_score", {
-    name: "Lower Strength Score",
-    state_topic: "tonal_client/lower_strength_score/state",
-    icon: "mdi:human-handsdown"
-  });
-
-  publishDiscovery("total_workouts", {
-    name: "Total Workouts",
-    state_topic: "tonal_client/total_workouts/state",
-    icon: "mdi:counter"
-  });
-
-  publishDiscovery("total_volume", {
-    name: "Total Volume",
-    state_topic: "tonal_client/total_volume/state",
-    unit_of_measurement: "lb",
-    icon: "mdi:weight-pound"
-  });
-
-  publishDiscovery("latest_workout", {
-    name: "Latest Workout",
-    state_topic: "tonal_client/latest_workout/state",
-    json_attributes_topic: "tonal_client/latest_workout/attributes",
-    device_class: "timestamp",
-    icon: "mdi:calendar-clock"
-  });
-
-  publishDiscovery("last_sync", {
-    name: "Last Sync",
-    state_topic: "tonal_client/last_sync/state",
-    device_class: "timestamp",
-    icon: "mdi:cloud-sync"
-  });
-
-  console.log("[Tonal Client] Core MQTT Discovery entities published.");
-}
-
-function createMuscleEntities() {
-  for (const muscle of MUSCLE_SCORES) {
-    publishDiscovery(muscle.id, {
-      name: muscle.name,
-      state_topic: `tonal_client/${muscle.id}/state`,
-      icon: "mdi:arm-flex"
-    });
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return;
   }
 
-  console.log(
-    `[Tonal Client] ${MUSCLE_SCORES.length} muscle Strength Score entities published.`
-  );
+  publish(`tonal_client/${id}/state`, String(value));
+}
+
+function publishAttributes(id, attributes) {
+  publish(`tonal_client/${id}/attributes`, attributes);
+}
+
+function numberSensor(id, name, options = {}) {
+  publishDiscovery(id, {
+    name,
+    state_topic: `tonal_client/${id}/state`,
+    ...options
+  });
+}
+
+function attributeSensor(id, name, options = {}) {
+  publishDiscovery(id, {
+    name,
+    state_topic: `tonal_client/${id}/state`,
+    json_attributes_topic: `tonal_client/${id}/attributes`,
+    ...options
+  });
 }
 
 function normalize(value) {
@@ -203,6 +128,27 @@ function normalize(value) {
     .toLowerCase()
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ");
+}
+
+function round(value, decimals = 0) {
+  const n = Number(value);
+
+  if (!Number.isFinite(n)) {
+    return null;
+  }
+
+  const factor = 10 ** decimals;
+  return Math.round(n * factor) / factor;
+}
+
+function secondsToMinutes(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? round(n / 60, 1) : null;
+}
+
+function secondsToHours(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? round(n / 3600, 1) : null;
 }
 
 function getRegionScore(scores, region) {
@@ -217,71 +163,25 @@ function getRegionScore(scores, region) {
     lower: ["lower", "lower body"]
   };
 
-  const wanted =
-    aliases[region.toLowerCase()] ?? [region.toLowerCase()];
-
-  const normalizedWanted = wanted.map(normalize);
+  const wanted = (aliases[normalize(region)] ?? [normalize(region)])
+    .map(normalize);
 
   const match = scores.find((item) => {
-    const value = normalize(
-      item.strengthBodyRegion ??
-      item.bodyRegion ??
+    const values = [
+      item.strengthBodyRegion,
+      item.bodyRegionDisplay,
+      item.bodyRegion,
       item.region
-    );
+    ].map(normalize);
 
-    return normalizedWanted.includes(value);
+    return values.some((value) => wanted.includes(value));
   });
 
   return match?.score ?? null;
 }
 
-function getMuscleScore(scores, aliases) {
-  if (!Array.isArray(scores)) {
-    return null;
-  }
-
-  const wanted = aliases.map(normalize);
-
-  for (const item of scores) {
-    const possibleNames = [
-      item.muscleGroup,
-      item.muscleGroupName,
-      item.muscle,
-      item.name,
-      item.strengthMuscleGroup,
-      item.strengthFamily,
-      item.family,
-      item.bodyPart
-    ]
-      .filter((value) => value !== undefined && value !== null)
-      .map(normalize);
-
-    if (possibleNames.some((value) => wanted.includes(value))) {
-      const value =
-        item.score ??
-        item.strengthScore ??
-        item.value ??
-        null;
-
-      if (value !== null) {
-        return value;
-      }
-    }
-  }
-
-  return null;
-}
-
-function findMuscleScoreDeep(value, aliases, seen = new Set()) {
-  if (value === null || value === undefined) {
-    return null;
-  }
-
-  if (typeof value !== "object") {
-    return null;
-  }
-
-  if (seen.has(value)) {
+function findDeepScore(value, aliases, seen = new Set()) {
+  if (!value || typeof value !== "object" || seen.has(value)) {
     return null;
   }
 
@@ -290,7 +190,7 @@ function findMuscleScoreDeep(value, aliases, seen = new Set()) {
   const wanted = aliases.map(normalize);
 
   if (!Array.isArray(value)) {
-    const possibleNames = [
+    const names = [
       value.muscleGroup,
       value.muscleGroupName,
       value.muscle,
@@ -303,30 +203,21 @@ function findMuscleScoreDeep(value, aliases, seen = new Set()) {
       .filter((item) => item !== undefined && item !== null)
       .map(normalize);
 
-    if (possibleNames.some((item) => wanted.includes(item))) {
+    if (names.some((name) => wanted.includes(name))) {
       const score =
         value.score ??
         value.strengthScore ??
         value.value ??
         null;
 
-      if (
-        score !== null &&
-        score !== undefined &&
-        !Number.isNaN(Number(score))
-      ) {
+      if (Number.isFinite(Number(score))) {
         return Number(score);
       }
     }
 
     for (const [key, child] of Object.entries(value)) {
       if (wanted.includes(normalize(key))) {
-        if (
-          typeof child === "number" ||
-          (typeof child === "string" &&
-            child.trim() !== "" &&
-            !Number.isNaN(Number(child)))
-        ) {
+        if (Number.isFinite(Number(child))) {
           return Number(child);
         }
 
@@ -337,11 +228,7 @@ function findMuscleScoreDeep(value, aliases, seen = new Set()) {
             child.value ??
             null;
 
-          if (
-            score !== null &&
-            score !== undefined &&
-            !Number.isNaN(Number(score))
-          ) {
+          if (Number.isFinite(Number(score))) {
             return Number(score);
           }
         }
@@ -354,11 +241,7 @@ function findMuscleScoreDeep(value, aliases, seen = new Set()) {
     : Object.values(value);
 
   for (const child of children) {
-    const result = findMuscleScoreDeep(
-      child,
-      aliases,
-      seen
-    );
+    const result = findDeepScore(child, aliases, seen);
 
     if (result !== null) {
       return result;
@@ -380,105 +263,456 @@ function getActivityTime(activity) {
 
 function sortActivitiesNewestFirst(activities) {
   return [...activities].sort((a, b) => {
-    const aTime = new Date(
-      getActivityTime(a) || 0
-    ).getTime();
-
-    const bTime = new Date(
-      getActivityTime(b) || 0
-    ).getTime();
-
-    return bTime - aTime;
+    return (
+      new Date(getActivityTime(b) || 0).getTime() -
+      new Date(getActivityTime(a) || 0).getTime()
+    );
   });
 }
 
+function createEntities() {
+  // Core strength
+  numberSensor("strength_score", "Strength Score", {
+    icon: "mdi:arm-flex"
+  });
+
+  numberSensor("upper_strength_score", "Upper Strength Score", {
+    icon: "mdi:arm-flex"
+  });
+
+  numberSensor("core_strength_score", "Core Strength Score", {
+    icon: "mdi:human"
+  });
+
+  numberSensor("lower_strength_score", "Lower Strength Score", {
+    icon: "mdi:human-handsdown"
+  });
+
+  // Muscle strength
+  for (const [id, name] of MUSCLE_SCORES) {
+    numberSensor(id, name, {
+      icon: "mdi:arm-flex"
+    });
+  }
+
+  // Lifetime volume
+  numberSensor("total_volume", "Total Volume", {
+    unit_of_measurement: "lb",
+    icon: "mdi:weight-pound"
+  });
+
+  numberSensor("max_workout_volume", "Max Workout Volume", {
+    unit_of_measurement: "lb",
+    icon: "mdi:weight-pound"
+  });
+
+  numberSensor("max_weekly_volume", "Max Weekly Volume", {
+    unit_of_measurement: "lb",
+    icon: "mdi:weight-pound"
+  });
+
+  numberSensor("average_workout_volume", "Average Workout Volume", {
+    unit_of_measurement: "lb",
+    icon: "mdi:weight-pound"
+  });
+
+  numberSensor("average_weekly_volume", "Average Weekly Volume", {
+    unit_of_measurement: "lb",
+    icon: "mdi:weight-pound"
+  });
+
+  // Workout statistics
+  numberSensor("total_workouts", "Total Workouts", {
+    icon: "mdi:counter"
+  });
+
+  numberSensor("free_lift_workouts", "Free Lift Workouts", {
+    icon: "mdi:dumbbell"
+  });
+
+  numberSensor("custom_workouts", "Custom Workouts", {
+    icon: "mdi:dumbbell"
+  });
+
+  numberSensor("max_workouts_per_week", "Max Workouts Per Week", {
+    icon: "mdi:calendar-week"
+  });
+
+  numberSensor("average_workouts_per_week", "Average Workouts Per Week", {
+    icon: "mdi:calendar-week"
+  });
+
+  numberSensor("average_workout_duration", "Average Workout Duration", {
+    unit_of_measurement: "min",
+    icon: "mdi:timer-outline"
+  });
+
+  numberSensor("max_workout_duration", "Max Workout Duration", {
+    unit_of_measurement: "min",
+    icon: "mdi:timer-outline"
+  });
+
+  numberSensor("total_workout_time", "Total Workout Time", {
+    unit_of_measurement: "h",
+    icon: "mdi:timer-outline"
+  });
+
+  numberSensor("total_time_under_tension", "Total Time Under Tension", {
+    unit_of_measurement: "h",
+    icon: "mdi:timer-sand"
+  });
+
+  // Movement/program statistics
+  numberSensor("unique_movements", "Unique Movements", {
+    icon: "mdi:weight-lifter"
+  });
+
+  numberSensor("total_programs", "Total Programs", {
+    icon: "mdi:clipboard-text-outline"
+  });
+
+  numberSensor("program_workouts", "Program Workouts", {
+    icon: "mdi:clipboard-check-outline"
+  });
+
+  numberSensor("program_volume", "Program Volume", {
+    unit_of_measurement: "lb",
+    icon: "mdi:weight-pound"
+  });
+
+  numberSensor("program_time", "Program Time", {
+    unit_of_measurement: "h",
+    icon: "mdi:timer-outline"
+  });
+
+  // Achievements
+  attributeSensor("achievements", "Achievements", {
+    icon: "mdi:trophy"
+  });
+
+  // Muscle readiness
+  for (const [id, name] of READINESS) {
+    numberSensor(id, name, {
+      unit_of_measurement: "%",
+      icon: "mdi:heart-pulse"
+    });
+  }
+
+  // Latest workout
+  attributeSensor("latest_workout", "Latest Workout", {
+    device_class: "timestamp",
+    icon: "mdi:calendar-clock"
+  });
+
+  numberSensor("latest_workout_volume", "Latest Workout Volume", {
+    unit_of_measurement: "lb",
+    icon: "mdi:weight-pound"
+  });
+
+  numberSensor("latest_workout_reps", "Latest Workout Reps", {
+    icon: "mdi:counter"
+  });
+
+  numberSensor("latest_workout_sets", "Latest Workout Sets", {
+    icon: "mdi:counter"
+  });
+
+  numberSensor("latest_workout_movements", "Latest Workout Movements", {
+    icon: "mdi:weight-lifter"
+  });
+
+  numberSensor("latest_workout_duration", "Latest Workout Duration", {
+    unit_of_measurement: "min",
+    icon: "mdi:timer-outline"
+  });
+
+  numberSensor(
+    "latest_workout_time_under_tension",
+    "Latest Workout Time Under Tension",
+    {
+      unit_of_measurement: "min",
+      icon: "mdi:timer-sand"
+    }
+  );
+
+  numberSensor("latest_workout_calories", "Latest Workout Calories", {
+    unit_of_measurement: "kcal",
+    icon: "mdi:fire"
+  });
+
+  // Historical datasets
+  attributeSensor("strength_history", "Strength History", {
+    icon: "mdi:chart-line"
+  });
+
+  attributeSensor("workout_history", "Workout History", {
+    icon: "mdi:history"
+  });
+
+  // Sync/status
+  numberSensor("workout_history_count", "Workout History Count", {
+    icon: "mdi:history"
+  });
+
+  publishDiscovery("last_sync", {
+    name: "Last Sync",
+    state_topic: "tonal_client/last_sync/state",
+    device_class: "timestamp",
+    icon: "mdi:cloud-sync",
+    unique_id: "tonal_client_last_sync",
+    object_id: "tonal_client_last_sync",
+    device: DEVICE
+  });
+
+  console.log("[Tonal Client] Full MQTT Discovery map published.");
+}
+
 async function syncTonal() {
-  if (!tonalClient || !mqttReady) {
+  if (!tonalClient || !mqttReady || syncRunning) {
     return;
   }
 
-  console.log("[Tonal Client] Starting Tonal sync...");
+  syncRunning = true;
+
+  console.log("[Tonal Client] Starting full Tonal sync...");
 
   try {
-    const [scores, statistics, activities] =
-      await Promise.all([
-        tonalClient.getCurrentStrengthScores(),
-        tonalClient.getUserStatistics(),
-        tonalClient.getAllWorkoutActivities()
-      ]);
+    const [
+      scores,
+      statistics,
+      achievementStats,
+      achievements,
+      readiness,
+      strengthHistory,
+      activities
+    ] = await Promise.all([
+      tonalClient.getCurrentStrengthScores(),
+      tonalClient.getUserStatistics(),
+      tonalClient.getAchievementStats(),
+      tonalClient.getAchievements(),
+      tonalClient.getMuscleReadiness(),
+      tonalClient.getStrengthScoreHistory(),
+      tonalClient.getAllWorkoutActivities()
+    ]);
+
+    // --------------------------------------------------
+    // Strength Scores
+    // --------------------------------------------------
 
     const overall = getRegionScore(scores, "Overall");
     const upper = getRegionScore(scores, "Upper");
     const core = getRegionScore(scores, "Core");
     const lower = getRegionScore(scores, "Lower");
 
-    if (overall !== null) {
-      publishState("strength_score", overall);
+    publishState("strength_score", round(overall));
+    publishState("upper_strength_score", round(upper));
+    publishState("core_strength_score", round(core));
+    publishState("lower_strength_score", round(lower));
+
+    for (const [id, , aliases] of MUSCLE_SCORES) {
+      const value = findDeepScore(scores, aliases);
+      publishState(id, round(value));
     }
 
-    if (upper !== null) {
-      publishState("upper_strength_score", upper);
+    // --------------------------------------------------
+    // Lifetime Statistics
+    // --------------------------------------------------
+
+    publishState("total_volume", statistics?.volume?.total);
+    publishState(
+      "max_workout_volume",
+      statistics?.volume?.maxVolumeInWorkout
+    );
+    publishState(
+      "max_weekly_volume",
+      statistics?.volume?.maxVolumeInAWeek
+    );
+    publishState(
+      "average_workout_volume",
+      statistics?.volume?.avgVolumePerWorkout
+    );
+    publishState(
+      "average_weekly_volume",
+      statistics?.volume?.avgVolumePerWeek
+    );
+
+    publishState("total_workouts", statistics?.workouts?.total);
+    publishState(
+      "free_lift_workouts",
+      statistics?.workouts?.totalFreeliftWorkouts
+    );
+    publishState(
+      "custom_workouts",
+      statistics?.workouts?.totalCustomWorkouts
+    );
+    publishState(
+      "max_workouts_per_week",
+      statistics?.workouts?.maxWorkoutsPerWeek
+    );
+    publishState(
+      "average_workouts_per_week",
+      statistics?.workouts?.avgWorkoutsPerWeek
+    );
+
+    publishState(
+      "average_workout_duration",
+      secondsToMinutes(statistics?.workouts?.avgWorkoutDuration)
+    );
+
+    publishState(
+      "max_workout_duration",
+      secondsToMinutes(statistics?.workouts?.maxWorkoutDuration)
+    );
+
+    publishState(
+      "total_workout_time",
+      secondsToHours(statistics?.workouts?.totalDuration)
+    );
+
+    publishState(
+      "total_time_under_tension",
+      secondsToHours(statistics?.workouts?.totalTimeUnderTension)
+    );
+
+    publishState("unique_movements", statistics?.movements?.total);
+
+    publishState("total_programs", statistics?.programs?.total);
+    publishState(
+      "program_workouts",
+      statistics?.programs?.totalProgramWorkouts
+    );
+    publishState(
+      "program_volume",
+      statistics?.programs?.totalProgramVolume
+    );
+    publishState(
+      "program_time",
+      secondsToHours(statistics?.programs?.totalDuration)
+    );
+
+    // --------------------------------------------------
+    // Achievements
+    // --------------------------------------------------
+
+    const achievementList = Array.isArray(achievements)
+      ? achievements
+      : [];
+
+    const nextMilestones = Array.isArray(achievementStats?.nextMilestones)
+      ? achievementStats.nextMilestones
+      : [];
+
+    publishState(
+      "achievements",
+      achievementStats?.totalAchievements ?? achievementList.length
+    );
+
+    publishAttributes("achievements", {
+      total_achievements:
+        achievementStats?.totalAchievements ?? achievementList.length,
+
+      next_milestones: nextMilestones.map((item) => ({
+        name: item.name ?? null,
+        description: item.shortDescription ?? item.description ?? null,
+        value: item.value ?? null
+      })),
+
+      earned: achievementList.map((item) => ({
+        name: item.name ?? item.achievement?.name ?? null,
+        description:
+          item.shortDescription ??
+          item.achievement?.shortDescription ??
+          null,
+        earned_at:
+          item.localTimestamp ??
+          item.createdAt ??
+          null,
+        category:
+          item.achievement?.achievementCategory?.name ??
+          null
+      }))
+    });
+
+    // --------------------------------------------------
+    // Muscle Readiness
+    // --------------------------------------------------
+
+    for (const [id, , apiName] of READINESS) {
+      publishState(id, readiness?.[apiName]);
     }
 
-    if (core !== null) {
-      publishState("core_strength_score", core);
-    }
+    // --------------------------------------------------
+    // Strength History
+    // --------------------------------------------------
 
-    if (lower !== null) {
-      publishState("lower_strength_score", lower);
-    }
+    const strengthEntries = Array.isArray(strengthHistory)
+      ? strengthHistory
+      : [];
 
-    const muscleResults = {};
+    publishState("strength_history", strengthEntries.length);
 
-    for (const muscle of MUSCLE_SCORES) {
-      let score = getMuscleScore(
-        scores,
-        muscle.aliases
-      );
+    publishAttributes("strength_history", {
+      count: strengthEntries.length,
 
-      if (score === null) {
-        score = findMuscleScoreDeep(
-          scores,
-          muscle.aliases
-        );
-      }
+      history: strengthEntries.map((entry) => ({
+        timestamp: entry.activityTime ?? null,
+        overall: entry.overall ?? null,
+        upper: entry.upper ?? null,
+        core: entry.core ?? null,
+        lower: entry.lower ?? null,
+        workout_activity_id: entry.workoutActivityId ?? null
+      }))
+    });
 
-      muscleResults[muscle.id] = score;
+    // --------------------------------------------------
+    // Workout History
+    // --------------------------------------------------
 
-      if (score !== null) {
-        publishState(muscle.id, score);
-      }
-    }
+    const sortedActivities = Array.isArray(activities)
+      ? sortActivitiesNewestFirst(activities)
+      : [];
 
-    const totalWorkouts =
-      statistics?.workouts?.total ??
-      (Array.isArray(activities)
-        ? activities.length
-        : null);
+    publishState("workout_history_count", sortedActivities.length);
+    publishState("workout_history", sortedActivities.length);
 
-    const totalVolume =
-      statistics?.volume?.total ?? null;
+    /*
+     * Keep this intentionally summarized.
+     * Publishing all raw set activity for 174 workouts into HA attributes
+     * would unnecessarily bloat Home Assistant's recorder/database.
+     */
+    publishAttributes("workout_history", {
+      count: sortedActivities.length,
 
-    if (totalWorkouts !== null) {
-      publishState(
-        "total_workouts",
-        totalWorkouts
-      );
-    }
+      workouts: sortedActivities.map((activity) => ({
+        id: activity.id ?? null,
+        timestamp: getActivityTime(activity),
+        end_time: activity.endTime ?? null,
+        type: activity.workoutType ?? activity.type ?? null,
+        duration_seconds:
+          activity.totalDuration ??
+          activity.duration ??
+          null,
+        active_duration_seconds:
+          activity.activeDuration ?? null,
+        movements:
+          activity.totalMovements ?? null,
+        sets:
+          activity.totalSets ?? null,
+        reps:
+          activity.totalReps ?? null,
+        volume:
+          activity.totalVolume ?? null,
+        percent_completed:
+          activity.percentCompleted ?? null
+      }))
+    });
 
-    if (totalVolume !== null) {
-      publishState(
-        "total_volume",
-        totalVolume
-      );
-    }
+    // --------------------------------------------------
+    // Latest Workout
+    // --------------------------------------------------
 
-    if (
-      Array.isArray(activities) &&
-      activities.length > 0
-    ) {
-      const latest =
-        sortActivitiesNewestFirst(activities)[0];
+    if (sortedActivities.length > 0) {
+      const latest = sortedActivities[0];
 
       const activityId =
         latest.id ??
@@ -486,8 +720,7 @@ async function syncTonal() {
         latest.workoutActivityId ??
         null;
 
-      const latestTime =
-        getActivityTime(latest);
+      const latestTime = getActivityTime(latest);
 
       if (latestTime) {
         publishState(
@@ -496,186 +729,223 @@ async function syncTonal() {
         );
       }
 
+      let summary = null;
+      let fullActivity = null;
+
       if (activityId) {
         try {
-          const summary =
-            await tonalClient.getFormattedWorkoutSummary(
-              activityId
-            );
-
-          const movementSets =
-            Array.isArray(summary?.movementSets)
-              ? summary.movementSets
-              : [];
-
-          const totalSets =
-            movementSets.reduce(
-              (sum, movement) =>
-                sum +
-                (Array.isArray(movement?.sets)
-                  ? movement.sets.length
-                  : 0),
-              0
-            );
-
-          const totalReps =
-            movementSets.reduce(
-              (sum, movement) =>
-                sum +
-                (Array.isArray(movement?.sets)
-                  ? movement.sets.reduce(
-                      (setSum, set) =>
-                        setSum +
-                        Number(
-                          set?.repCount || 0
-                        ),
-                      0
-                    )
-                  : 0),
-              0
-            );
-
-          const workoutVolume =
-            movementSets.reduce(
-              (sum, movement) =>
-                sum +
-                Number(
-                  movement?.totalVolume || 0
-                ),
-              0
-            );
-
-          publish(
-            "tonal_client/latest_workout/attributes",
-            {
-              activity_id: activityId,
-              type:
-                latest.type ??
-                latest.workoutType ??
-                summary?.type ??
-                "Unknown",
-
-              duration_seconds:
-                summary?.duration ??
-                latest.duration ??
-                null,
-
-              time_under_tension_seconds:
-                summary?.timeUnderTension ??
-                latest.timeUnderTension ??
-                null,
-
-              total_volume: workoutVolume,
-              total_reps: totalReps,
-              set_count: totalSets,
-              movement_count:
-                movementSets.length,
-
-              movements:
-                movementSets.map(
-                  (movement) => ({
-                    name:
-                      movement.movementName ??
-                      movement.name ??
-                      "Unknown",
-
-                    total_volume:
-                      movement.totalVolume ??
-                      null,
-
-                    sets:
-                      Array.isArray(
-                        movement.sets
-                      )
-                        ? movement.sets.map(
-                            (set) => ({
-                              reps:
-                                set.repCount ??
-                                null,
-
-                              goal:
-                                set.repGoal ??
-                                null,
-
-                              weight:
-                                set.weight ??
-                                null,
-
-                              duration:
-                                set.duration ??
-                                null,
-
-                              one_rep_max:
-                                set.oneRepMax ??
-                                null,
-
-                              max_power:
-                                set.maxConPower ??
-                                null,
-
-                              volume:
-                                set.totalVolume ??
-                                null,
-
-                              spotter_mode:
-                                set.spotterMode ??
-                                null
-                            })
-                          )
-                        : []
-                  })
-                )
-            }
-          );
+          [summary, fullActivity] = await Promise.all([
+            tonalClient.getFormattedWorkoutSummary(activityId),
+            tonalClient.getWorkoutActivityById(activityId)
+          ]);
         } catch (error) {
           console.error(
             "[Tonal Client] Latest workout detail ERROR:",
-            error instanceof Error
-              ? error.message
-              : String(error)
+            error instanceof Error ? error.message : String(error)
           );
         }
       }
+
+      const movementSets = Array.isArray(summary?.movementSets)
+        ? summary.movementSets
+        : [];
+
+      const totalSets =
+        latest.totalSets ??
+        movementSets.reduce(
+          (sum, movement) =>
+            sum +
+            (Array.isArray(movement?.sets)
+              ? movement.sets.length
+              : 0),
+          0
+        );
+
+      const totalReps =
+        latest.totalReps ??
+        movementSets.reduce(
+          (sum, movement) =>
+            sum +
+            (Array.isArray(movement?.sets)
+              ? movement.sets.reduce(
+                  (setSum, set) =>
+                    setSum + Number(set?.repCount || 0),
+                  0
+                )
+              : 0),
+          0
+        );
+
+      const totalVolume =
+        latest.totalVolume ??
+        movementSets.reduce(
+          (sum, movement) =>
+            sum + Number(movement?.totalVolume || 0),
+          0
+        );
+
+      const movementCount =
+        latest.totalMovements ??
+        movementSets.length;
+
+      const durationSeconds =
+        summary?.duration ??
+        latest.totalDuration ??
+        latest.duration ??
+        null;
+
+      const tutSeconds =
+        summary?.timeUnderTension ??
+        latest.activeDuration ??
+        null;
+
+      const tonalCalories = Array.isArray(fullActivity?.calories)
+        ? fullActivity.calories.find(
+            (item) => normalize(item.algorithm) === "tonal"
+          )?.caloriesBurned
+        : null;
+
+      publishState("latest_workout_volume", totalVolume);
+      publishState("latest_workout_reps", totalReps);
+      publishState("latest_workout_sets", totalSets);
+      publishState("latest_workout_movements", movementCount);
+      publishState(
+        "latest_workout_duration",
+        secondsToMinutes(durationSeconds)
+      );
+      publishState(
+        "latest_workout_time_under_tension",
+        secondsToMinutes(tutSeconds)
+      );
+      publishState(
+        "latest_workout_calories",
+        round(tonalCalories, 1)
+      );
+
+      publishAttributes("latest_workout", {
+        activity_id: activityId,
+
+        workout_type:
+          latest.workoutType ??
+          latest.type ??
+          null,
+
+        timestamp:
+          summary?.timestamp ??
+          latestTime ??
+          null,
+
+        local_timestamp:
+          summary?.localTimestamp ??
+          null,
+
+        end_time:
+          summary?.endTime ??
+          latest.endTime ??
+          null,
+
+        timezone:
+          summary?.timeZone ??
+          latest.timezone ??
+          null,
+
+        duration_seconds: durationSeconds,
+        time_under_tension_seconds: tutSeconds,
+        total_volume: totalVolume,
+        total_reps: totalReps,
+        set_count: totalSets,
+        movement_count: movementCount,
+        calories: round(tonalCalories, 1),
+
+        completed:
+          fullActivity?.completed ??
+          latest.completed ??
+          null,
+
+        percent_completed:
+          latest.percentCompleted ??
+          null,
+
+        is_in_program:
+          summary?.isInProgram ??
+          null,
+
+        is_guided_workout:
+          summary?.isGuidedWorkout ??
+          null,
+
+        movements: movementSets.map((movement) => ({
+          name:
+            movement.movementName ??
+            movement.name ??
+            "Unknown",
+
+          movement_id:
+            movement.movementId ??
+            null,
+
+          total_volume:
+            movement.totalVolume ??
+            null,
+
+          reps:
+            movement.reps ??
+            null,
+
+          average_weight:
+            round(movement.avgWeight, 1),
+
+          peak_power:
+            round(
+              movement?.bilateralMovementMetrics?.peakPower,
+              1
+            ),
+
+          sets: Array.isArray(movement.sets)
+            ? movement.sets.map((set) => ({
+                reps: set.repCount ?? null,
+                goal: set.repGoal ?? null,
+                weight: set.weight ?? null,
+                duration_seconds: set.duration ?? null,
+                one_rep_max: set.oneRepMax ?? null,
+                max_power: set.maxConPower ?? null,
+                volume: set.totalVolume ?? null,
+                spotter_mode: set.spotterMode ?? null,
+                warm_up: set.warmUp ?? null,
+                burnout: set.burnout ?? null,
+                drop_set: set.dropSet ?? null,
+                suggested_weight_change:
+                  set.suggestedWeightChange ?? null,
+                prs: set.prs ?? []
+              }))
+            : []
+        }))
+      });
     }
+
+    // --------------------------------------------------
+    // Sync complete
+    // --------------------------------------------------
 
     const now = new Date().toISOString();
 
     publishState("last_sync", now);
 
-    const foundMuscles =
-      Object.entries(muscleResults)
-        .filter(([, value]) => value !== null)
-        .map(
-          ([key, value]) =>
-            `${key.replace(
-              "_strength_score",
-              ""
-            )}=${value}`
-        )
-        .join(", ");
-
     console.log(
-      `[Tonal Client] Sync complete — ` +
-      `Strength ${overall ?? "?"}, ` +
-      `Upper ${upper ?? "?"}, ` +
-      `Core ${core ?? "?"}, ` +
-      `Lower ${lower ?? "?"}, ` +
-      `Workouts ${totalWorkouts ?? "?"}, ` +
-      `Volume ${totalVolume ?? "?"}`
-    );
-
-    console.log(
-      `[Tonal Client] Muscle scores — ${
-        foundMuscles || "none found"
-      }`
+      `[Tonal Client] Full sync complete — ` +
+      `Strength ${round(overall) ?? "?"}, ` +
+      `Workouts ${statistics?.workouts?.total ?? "?"}, ` +
+      `Volume ${statistics?.volume?.total ?? "?"}, ` +
+      `Achievements ${achievementStats?.totalAchievements ?? "?"}, ` +
+      `History ${sortedActivities.length}`
     );
   } catch (error) {
     console.error(
       "[Tonal Client] Tonal sync ERROR:",
-      error instanceof Error
-        ? error.message
-        : String(error)
+      error instanceof Error ? error.message : String(error)
     );
+  } finally {
+    syncRunning = false;
   }
 }
 
@@ -684,13 +954,9 @@ mqttClient.on("connect", async () => {
 
   mqttReady = true;
 
-  createCoreEntities();
-  createMuscleEntities();
+  createEntities();
 
-  /*
-   * Remove the original MQTT Discovery
-   * test entity if it still exists.
-   */
+  // Clean up the old proof-of-concept discovery entity.
   publish(
     "homeassistant/sensor/tonal_client_test/config",
     ""
@@ -703,36 +969,26 @@ mqttClient.on("connect", async () => {
 
 mqttClient.on("offline", () => {
   mqttReady = false;
-
-  console.log(
-    "[Tonal Client] MQTT offline."
-  );
+  console.log("[Tonal Client] MQTT offline.");
 });
 
 mqttClient.on("error", (error) => {
   console.error(
     "[Tonal Client] MQTT ERROR:",
-    error instanceof Error
-      ? error.message
-      : String(error)
+    error instanceof Error ? error.message : String(error)
   );
 });
 
 try {
-  console.log(
-    "[Tonal Client] Authenticating with Tonal..."
-  );
+  console.log("[Tonal Client] Authenticating with Tonal...");
 
-  tonalClient =
-    await TonalClient.create({
-      username: tonalEmail,
-      password: tonalPassword,
-      cacheDir: "/data/cache"
-    });
+  tonalClient = await TonalClient.create({
+    username: tonalEmail,
+    password: tonalPassword,
+    cacheDir: "/data/cache"
+  });
 
-  console.log(
-    "[Tonal Client] Tonal authentication successful."
-  );
+  console.log("[Tonal Client] Tonal authentication successful.");
 
   if (mqttReady) {
     await syncTonal();
@@ -749,9 +1005,7 @@ try {
 } catch (error) {
   console.error(
     "[Tonal Client] FATAL ERROR:",
-    error instanceof Error
-      ? error.message
-      : String(error)
+    error instanceof Error ? error.message : String(error)
   );
 
   process.exit(1);
