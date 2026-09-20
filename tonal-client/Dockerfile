@@ -1,6 +1,8 @@
-FROM node:22-alpine
+FROM ghcr.io/home-assistant/amd64-base:latest
 
 WORKDIR /app
+
+RUN apk add --no-cache nodejs npm
 
 COPY package.json /app/package.json
 
