@@ -135,11 +135,29 @@ function getRegionScore(scores, region) {
     return null;
   }
 
-  const match = scores.find(
-    (item) =>
-      String(item.strengthBodyRegion || "").toLowerCase() ===
-      region.toLowerCase()
-  );
+  const aliases = {
+    overall: ["overall"],
+    upper: ["upper", "upper_body", "upper body"],
+    core: ["core"],
+    lower: ["lower", "lower_body", "lower body"]
+  };
+
+  const wanted = aliases[region.toLowerCase()] ?? [
+    region.toLowerCase()
+  ];
+
+  const match = scores.find((item) => {
+    const value = String(
+      item.strengthBodyRegion ??
+      item.bodyRegion ??
+      item.region ??
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+    return wanted.includes(value);
+  });
 
   return match?.score ?? null;
 }
@@ -328,7 +346,11 @@ async function syncTonal() {
     publishState("last_sync", now);
 
     console.log(
-      `[Tonal Client] Sync complete — Strength ${overall ?? "?"}, ` +
+      `[Tonal Client] Sync complete — ` +
+      `Strength ${overall ?? "?"}, ` +
+      `Upper ${upper ?? "?"}, ` +
+      `Core ${core ?? "?"}, ` +
+      `Lower ${lower ?? "?"}, ` +
       `Workouts ${totalWorkouts ?? "?"}, ` +
       `Volume ${totalVolume ?? "?"}`
     );
@@ -351,8 +373,6 @@ mqttClient.on("connect", async () => {
 
   /*
    * Remove the old MQTT Discovery test entity.
-   * Publishing an empty retained discovery payload tells
-   * Home Assistant to remove it.
    */
   publish(
     "homeassistant/sensor/tonal_client_test/config",
