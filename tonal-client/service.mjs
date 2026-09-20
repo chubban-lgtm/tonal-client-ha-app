@@ -34,6 +34,59 @@ const DEVICE = {
   model: "Tonal Cloud Client"
 };
 
+const MUSCLE_SCORES = [
+  {
+    id: "back_strength_score",
+    name: "Back Strength Score",
+    aliases: ["back"]
+  },
+  {
+    id: "biceps_strength_score",
+    name: "Biceps Strength Score",
+    aliases: ["biceps"]
+  },
+  {
+    id: "chest_strength_score",
+    name: "Chest Strength Score",
+    aliases: ["chest"]
+  },
+  {
+    id: "shoulders_strength_score",
+    name: "Shoulders Strength Score",
+    aliases: ["shoulders", "shoulder"]
+  },
+  {
+    id: "triceps_strength_score",
+    name: "Triceps Strength Score",
+    aliases: ["triceps"]
+  },
+  {
+    id: "abs_strength_score",
+    name: "Abs Strength Score",
+    aliases: ["abs", "abdominals"]
+  },
+  {
+    id: "obliques_strength_score",
+    name: "Obliques Strength Score",
+    aliases: ["obliques"]
+  },
+  {
+    id: "glutes_strength_score",
+    name: "Glutes Strength Score",
+    aliases: ["glutes"]
+  },
+  {
+    id: "hamstrings_strength_score",
+    name: "Hamstrings Strength Score",
+    aliases: ["hamstrings"]
+  },
+  {
+    id: "quads_strength_score",
+    name: "Quads Strength Score",
+    aliases: ["quads", "quadriceps"]
+  }
+];
+
 let mqttReady = false;
 let tonalClient = null;
 
@@ -130,6 +183,28 @@ function createCoreEntities() {
   console.log("[Tonal Client] Core MQTT Discovery entities published.");
 }
 
+function createMuscleEntities() {
+  for (const muscle of MUSCLE_SCORES) {
+    publishDiscovery(muscle.id, {
+      name: muscle.name,
+      state_topic: `tonal_client/${muscle.id}/state`,
+      icon: "mdi:arm-flex"
+    });
+  }
+
+  console.log(
+    `[Tonal Client] ${MUSCLE_SCORES.length} muscle Strength Score entities published.`
+  );
+}
+
+function normalize(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
 function getRegionScore(scores, region) {
   if (!Array.isArray(scores)) {
     return null;
@@ -137,29 +212,160 @@ function getRegionScore(scores, region) {
 
   const aliases = {
     overall: ["overall"],
-    upper: ["upper", "upper_body", "upper body"],
+    upper: ["upper", "upper body"],
     core: ["core"],
-    lower: ["lower", "lower_body", "lower body"]
+    lower: ["lower", "lower body"]
   };
 
-  const wanted = aliases[region.toLowerCase()] ?? [
-    region.toLowerCase()
-  ];
+  const wanted =
+    aliases[region.toLowerCase()] ?? [region.toLowerCase()];
+
+  const normalizedWanted = wanted.map(normalize);
 
   const match = scores.find((item) => {
-    const value = String(
+    const value = normalize(
       item.strengthBodyRegion ??
       item.bodyRegion ??
-      item.region ??
-      ""
-    )
-      .trim()
-      .toLowerCase();
+      item.region
+    );
 
-    return wanted.includes(value);
+    return normalizedWanted.includes(value);
   });
 
   return match?.score ?? null;
+}
+
+function getMuscleScore(scores, aliases) {
+  if (!Array.isArray(scores)) {
+    return null;
+  }
+
+  const wanted = aliases.map(normalize);
+
+  for (const item of scores) {
+    const possibleNames = [
+      item.muscleGroup,
+      item.muscleGroupName,
+      item.muscle,
+      item.name,
+      item.strengthMuscleGroup,
+      item.strengthFamily,
+      item.family,
+      item.bodyPart
+    ]
+      .filter((value) => value !== undefined && value !== null)
+      .map(normalize);
+
+    if (possibleNames.some((value) => wanted.includes(value))) {
+      const value =
+        item.score ??
+        item.strengthScore ??
+        item.value ??
+        null;
+
+      if (value !== null) {
+        return value;
+      }
+    }
+  }
+
+  return null;
+}
+
+function findMuscleScoreDeep(value, aliases, seen = new Set()) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value !== "object") {
+    return null;
+  }
+
+  if (seen.has(value)) {
+    return null;
+  }
+
+  seen.add(value);
+
+  const wanted = aliases.map(normalize);
+
+  if (!Array.isArray(value)) {
+    const possibleNames = [
+      value.muscleGroup,
+      value.muscleGroupName,
+      value.muscle,
+      value.name,
+      value.strengthMuscleGroup,
+      value.strengthFamily,
+      value.family,
+      value.bodyPart
+    ]
+      .filter((item) => item !== undefined && item !== null)
+      .map(normalize);
+
+    if (possibleNames.some((item) => wanted.includes(item))) {
+      const score =
+        value.score ??
+        value.strengthScore ??
+        value.value ??
+        null;
+
+      if (
+        score !== null &&
+        score !== undefined &&
+        !Number.isNaN(Number(score))
+      ) {
+        return Number(score);
+      }
+    }
+
+    for (const [key, child] of Object.entries(value)) {
+      if (wanted.includes(normalize(key))) {
+        if (
+          typeof child === "number" ||
+          (typeof child === "string" &&
+            child.trim() !== "" &&
+            !Number.isNaN(Number(child)))
+        ) {
+          return Number(child);
+        }
+
+        if (child && typeof child === "object") {
+          const score =
+            child.score ??
+            child.strengthScore ??
+            child.value ??
+            null;
+
+          if (
+            score !== null &&
+            score !== undefined &&
+            !Number.isNaN(Number(score))
+          ) {
+            return Number(score);
+          }
+        }
+      }
+    }
+  }
+
+  const children = Array.isArray(value)
+    ? value
+    : Object.values(value);
+
+  for (const child of children) {
+    const result = findMuscleScoreDeep(
+      child,
+      aliases,
+      seen
+    );
+
+    if (result !== null) {
+      return result;
+    }
+  }
+
+  return null;
 }
 
 function getActivityTime(activity) {
@@ -174,8 +380,13 @@ function getActivityTime(activity) {
 
 function sortActivitiesNewestFirst(activities) {
   return [...activities].sort((a, b) => {
-    const aTime = new Date(getActivityTime(a) || 0).getTime();
-    const bTime = new Date(getActivityTime(b) || 0).getTime();
+    const aTime = new Date(
+      getActivityTime(a) || 0
+    ).getTime();
+
+    const bTime = new Date(
+      getActivityTime(b) || 0
+    ).getTime();
 
     return bTime - aTime;
   });
@@ -189,11 +400,12 @@ async function syncTonal() {
   console.log("[Tonal Client] Starting Tonal sync...");
 
   try {
-    const [scores, statistics, activities] = await Promise.all([
-      tonalClient.getCurrentStrengthScores(),
-      tonalClient.getUserStatistics(),
-      tonalClient.getAllWorkoutActivities()
-    ]);
+    const [scores, statistics, activities] =
+      await Promise.all([
+        tonalClient.getCurrentStrengthScores(),
+        tonalClient.getUserStatistics(),
+        tonalClient.getAllWorkoutActivities()
+      ]);
 
     const overall = getRegionScore(scores, "Overall");
     const upper = getRegionScore(scores, "Upper");
@@ -216,23 +428,57 @@ async function syncTonal() {
       publishState("lower_strength_score", lower);
     }
 
+    const muscleResults = {};
+
+    for (const muscle of MUSCLE_SCORES) {
+      let score = getMuscleScore(
+        scores,
+        muscle.aliases
+      );
+
+      if (score === null) {
+        score = findMuscleScoreDeep(
+          scores,
+          muscle.aliases
+        );
+      }
+
+      muscleResults[muscle.id] = score;
+
+      if (score !== null) {
+        publishState(muscle.id, score);
+      }
+    }
+
     const totalWorkouts =
       statistics?.workouts?.total ??
-      (Array.isArray(activities) ? activities.length : null);
+      (Array.isArray(activities)
+        ? activities.length
+        : null);
 
     const totalVolume =
       statistics?.volume?.total ?? null;
 
     if (totalWorkouts !== null) {
-      publishState("total_workouts", totalWorkouts);
+      publishState(
+        "total_workouts",
+        totalWorkouts
+      );
     }
 
     if (totalVolume !== null) {
-      publishState("total_volume", totalVolume);
+      publishState(
+        "total_volume",
+        totalVolume
+      );
     }
 
-    if (Array.isArray(activities) && activities.length > 0) {
-      const latest = sortActivitiesNewestFirst(activities)[0];
+    if (
+      Array.isArray(activities) &&
+      activities.length > 0
+    ) {
+      const latest =
+        sortActivitiesNewestFirst(activities)[0];
 
       const activityId =
         latest.id ??
@@ -240,7 +486,8 @@ async function syncTonal() {
         latest.workoutActivityId ??
         null;
 
-      const latestTime = getActivityTime(latest);
+      const latestTime =
+        getActivityTime(latest);
 
       if (latestTime) {
         publishState(
@@ -252,39 +499,51 @@ async function syncTonal() {
       if (activityId) {
         try {
           const summary =
-            await tonalClient.getFormattedWorkoutSummary(activityId);
+            await tonalClient.getFormattedWorkoutSummary(
+              activityId
+            );
 
-          const movementSets = Array.isArray(summary?.movementSets)
-            ? summary.movementSets
-            : [];
+          const movementSets =
+            Array.isArray(summary?.movementSets)
+              ? summary.movementSets
+              : [];
 
-          const totalSets = movementSets.reduce(
-            (sum, movement) =>
-              sum +
-              (Array.isArray(movement?.sets)
-                ? movement.sets.length
-                : 0),
-            0
-          );
+          const totalSets =
+            movementSets.reduce(
+              (sum, movement) =>
+                sum +
+                (Array.isArray(movement?.sets)
+                  ? movement.sets.length
+                  : 0),
+              0
+            );
 
-          const totalReps = movementSets.reduce(
-            (sum, movement) =>
-              sum +
-              (Array.isArray(movement?.sets)
-                ? movement.sets.reduce(
-                    (setSum, set) =>
-                      setSum + Number(set?.repCount || 0),
-                    0
-                  )
-                : 0),
-            0
-          );
+          const totalReps =
+            movementSets.reduce(
+              (sum, movement) =>
+                sum +
+                (Array.isArray(movement?.sets)
+                  ? movement.sets.reduce(
+                      (setSum, set) =>
+                        setSum +
+                        Number(
+                          set?.repCount || 0
+                        ),
+                      0
+                    )
+                  : 0),
+              0
+            );
 
-          const workoutVolume = movementSets.reduce(
-            (sum, movement) =>
-              sum + Number(movement?.totalVolume || 0),
-            0
-          );
+          const workoutVolume =
+            movementSets.reduce(
+              (sum, movement) =>
+                sum +
+                Number(
+                  movement?.totalVolume || 0
+                ),
+              0
+            );
 
           publish(
             "tonal_client/latest_workout/attributes",
@@ -295,39 +554,77 @@ async function syncTonal() {
                 latest.workoutType ??
                 summary?.type ??
                 "Unknown",
+
               duration_seconds:
                 summary?.duration ??
                 latest.duration ??
                 null,
+
               time_under_tension_seconds:
                 summary?.timeUnderTension ??
                 latest.timeUnderTension ??
                 null,
+
               total_volume: workoutVolume,
               total_reps: totalReps,
               set_count: totalSets,
-              movement_count: movementSets.length,
-              movements: movementSets.map((movement) => ({
-                name:
-                  movement.movementName ??
-                  movement.name ??
-                  "Unknown",
-                total_volume:
-                  movement.totalVolume ?? null,
-                sets: Array.isArray(movement.sets)
-                  ? movement.sets.map((set) => ({
-                      reps: set.repCount ?? null,
-                      goal: set.repGoal ?? null,
-                      weight: set.weight ?? null,
-                      duration: set.duration ?? null,
-                      one_rep_max: set.oneRepMax ?? null,
-                      max_power: set.maxConPower ?? null,
-                      volume: set.totalVolume ?? null,
-                      spotter_mode:
-                        set.spotterMode ?? null
-                    }))
-                  : []
-              }))
+              movement_count:
+                movementSets.length,
+
+              movements:
+                movementSets.map(
+                  (movement) => ({
+                    name:
+                      movement.movementName ??
+                      movement.name ??
+                      "Unknown",
+
+                    total_volume:
+                      movement.totalVolume ??
+                      null,
+
+                    sets:
+                      Array.isArray(
+                        movement.sets
+                      )
+                        ? movement.sets.map(
+                            (set) => ({
+                              reps:
+                                set.repCount ??
+                                null,
+
+                              goal:
+                                set.repGoal ??
+                                null,
+
+                              weight:
+                                set.weight ??
+                                null,
+
+                              duration:
+                                set.duration ??
+                                null,
+
+                              one_rep_max:
+                                set.oneRepMax ??
+                                null,
+
+                              max_power:
+                                set.maxConPower ??
+                                null,
+
+                              volume:
+                                set.totalVolume ??
+                                null,
+
+                              spotter_mode:
+                                set.spotterMode ??
+                                null
+                            })
+                          )
+                        : []
+                  })
+                )
             }
           );
         } catch (error) {
@@ -345,6 +642,18 @@ async function syncTonal() {
 
     publishState("last_sync", now);
 
+    const foundMuscles =
+      Object.entries(muscleResults)
+        .filter(([, value]) => value !== null)
+        .map(
+          ([key, value]) =>
+            `${key.replace(
+              "_strength_score",
+              ""
+            )}=${value}`
+        )
+        .join(", ");
+
     console.log(
       `[Tonal Client] Sync complete — ` +
       `Strength ${overall ?? "?"}, ` +
@@ -353,6 +662,12 @@ async function syncTonal() {
       `Lower ${lower ?? "?"}, ` +
       `Workouts ${totalWorkouts ?? "?"}, ` +
       `Volume ${totalVolume ?? "?"}`
+    );
+
+    console.log(
+      `[Tonal Client] Muscle scores — ${
+        foundMuscles || "none found"
+      }`
     );
   } catch (error) {
     console.error(
@@ -370,9 +685,11 @@ mqttClient.on("connect", async () => {
   mqttReady = true;
 
   createCoreEntities();
+  createMuscleEntities();
 
   /*
-   * Remove the old MQTT Discovery test entity.
+   * Remove the original MQTT Discovery
+   * test entity if it still exists.
    */
   publish(
     "homeassistant/sensor/tonal_client_test/config",
@@ -386,7 +703,10 @@ mqttClient.on("connect", async () => {
 
 mqttClient.on("offline", () => {
   mqttReady = false;
-  console.log("[Tonal Client] MQTT offline.");
+
+  console.log(
+    "[Tonal Client] MQTT offline."
+  );
 });
 
 mqttClient.on("error", (error) => {
@@ -399,15 +719,20 @@ mqttClient.on("error", (error) => {
 });
 
 try {
-  console.log("[Tonal Client] Authenticating with Tonal...");
+  console.log(
+    "[Tonal Client] Authenticating with Tonal..."
+  );
 
-  tonalClient = await TonalClient.create({
-    username: tonalEmail,
-    password: tonalPassword,
-    cacheDir: "/data/cache"
-  });
+  tonalClient =
+    await TonalClient.create({
+      username: tonalEmail,
+      password: tonalPassword,
+      cacheDir: "/data/cache"
+    });
 
-  console.log("[Tonal Client] Tonal authentication successful.");
+  console.log(
+    "[Tonal Client] Tonal authentication successful."
+  );
 
   if (mqttReady) {
     await syncTonal();
