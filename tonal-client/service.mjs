@@ -1,7 +1,8 @@
 import fs from "node:fs";
+import mqtt from "mqtt";
 import TonalClient from "@dlwiest/ts-tonal-client";
 
-console.log("[Tonal Client] Diagnostic service starting...");
+console.log("[Tonal Client] Starting permanent service...");
 
 const optionsPath = "/data/options.json";
 
@@ -12,153 +13,150 @@ if (!fs.existsSync(optionsPath)) {
 
 const options = JSON.parse(fs.readFileSync(optionsPath, "utf8"));
 
-const email = options.tonal_email;
-const password = options.tonal_password;
+const tonalEmail = options.tonal_email;
+const tonalPassword = options.tonal_password;
+const syncInterval = Number(options.sync_interval || 21600);
 
-if (!email || !password) {
-  console.error("[Tonal Client] ERROR: Tonal email/password not configured.");
+if (!tonalEmail || !tonalPassword) {
+  console.error("[Tonal Client] ERROR: Tonal credentials are not configured.");
   process.exit(1);
 }
 
-function printSection(title) {
-  console.log("");
-  console.log("==================================================");
-  console.log(`[Tonal Client] ${title}`);
-  console.log("==================================================");
+/*
+ * MQTT test configuration.
+ *
+ * Home Assistant's Mosquitto app is available to other apps through
+ * the internal hostname core-mosquitto.
+ *
+ * For this first test we're checking whether the app can connect using
+ * the Supervisor-provided MQTT service environment.
+ */
+
+const mqttHost =
+  process.env.MQTT_HOST ||
+  process.env.MQTT_SERVER ||
+  "core-mosquitto";
+
+const mqttPort = Number(
+  process.env.MQTT_PORT || 1883
+);
+
+const mqttUsername =
+  process.env.MQTT_USERNAME ||
+  process.env.MQTT_USER ||
+  "";
+
+const mqttPassword =
+  process.env.MQTT_PASSWORD ||
+  "";
+
+console.log(`[Tonal Client] MQTT broker: ${mqttHost}:${mqttPort}`);
+
+const mqttClient = mqtt.connect({
+  host: mqttHost,
+  port: mqttPort,
+  username: mqttUsername || undefined,
+  password: mqttPassword || undefined,
+  reconnectPeriod: 5000
+});
+
+mqttClient.on("connect", async () => {
+  console.log("[Tonal Client] MQTT connected.");
+
+  const discoveryTopic =
+    "homeassistant/sensor/tonal_client_test/config";
+
+  const stateTopic =
+    "tonal_client/test/state";
+
+  const discoveryPayload = {
+    name: "Tonal Client Test",
+    unique_id: "tonal_client_test",
+    state_topic: stateTopic,
+    icon: "mdi:weight-lifter",
+    device: {
+      identifiers: ["tonal_client"],
+      name: "Tonal Client",
+      manufacturer: "Tonal",
+      model: "Tonal Cloud Client"
+    }
+  };
+
+  mqttClient.publish(
+    discoveryTopic,
+    JSON.stringify(discoveryPayload),
+    {
+      retain: true
+    }
+  );
+
+  mqttClient.publish(
+    stateTopic,
+    "connected",
+    {
+      retain: true
+    }
+  );
+
+  console.log("[Tonal Client] MQTT Discovery test sensor published.");
+});
+
+mqttClient.on("error", (error) => {
+  console.error(
+    "[Tonal Client] MQTT ERROR:",
+    error instanceof Error ? error.message : String(error)
+  );
+});
+
+async function connectTonal() {
+  console.log("[Tonal Client] Authenticating with Tonal...");
+
+  const client = await TonalClient.create({
+    username: tonalEmail,
+    password: tonalPassword,
+    cacheDir: "/data/cache"
+  });
+
+  console.log("[Tonal Client] Tonal authentication successful.");
+
+  return client;
 }
 
-function printData(label, data) {
-  console.log(`[Tonal Client] ${label}:`);
-  console.log(JSON.stringify(data, null, 2));
-}
-
-async function test(name, fn) {
-  printSection(name);
-
+async function syncTonal(client) {
   try {
-    const result = await fn();
-    printData("Result", result);
-    return result;
+    console.log("[Tonal Client] Starting Tonal sync...");
+
+    const scores = await client.getCurrentStrengthScores();
+
+    const overall =
+      scores.find((item) => item.strengthBodyRegion === "Overall")?.score;
+
+    console.log(
+      `[Tonal Client] Current Strength Score: ${overall ?? "unknown"}`
+    );
+
+    console.log("[Tonal Client] Tonal sync completed.");
   } catch (error) {
     console.error(
-      `[Tonal Client] ${name} ERROR:`,
+      "[Tonal Client] Tonal sync ERROR:",
       error instanceof Error ? error.message : String(error)
     );
-    return null;
   }
 }
 
 try {
-  console.log("[Tonal Client] Authenticating with Tonal...");
+  const tonalClient = await connectTonal();
 
-  const client = await TonalClient.create({
-    username: email,
-    password,
-    cacheDir: "/data/cache"
-  });
-
-  console.log("[Tonal Client] Authentication successful.");
-
-  await test("USER INFO", () =>
-    client.getUserInfo()
-  );
-
-  await test("CURRENT STRENGTH SCORES", () =>
-    client.getCurrentStrengthScores()
-  );
-
-  const strengthHistory = await test("STRENGTH SCORE HISTORY", () =>
-    client.getStrengthScoreHistory()
-  );
-
-  await test("USER STATISTICS", () =>
-    client.getUserStatistics()
-  );
-
-  await test("ACHIEVEMENT STATS", () =>
-    client.getAchievementStats()
-  );
-
-  await test("ACHIEVEMENTS", () =>
-    client.getAchievements()
-  );
-
-  await test("MUSCLE READINESS", () =>
-    client.getMuscleReadiness()
-  );
-
-  const activities = await test("COMPLETED WORKOUT ACTIVITIES", () =>
-    client.getAllWorkoutActivities()
-  );
-
-  if (Array.isArray(activities) && activities.length > 0) {
-    const sorted = [...activities].sort((a, b) => {
-      const aTime = new Date(
-        a.beginTime ?? a.begin_time ?? a.startTime ?? 0
-      ).getTime();
-
-      const bTime = new Date(
-        b.beginTime ?? b.begin_time ?? b.startTime ?? 0
-      ).getTime();
-
-      return bTime - aTime;
-    });
-
-    const latest = sorted[0];
-
-    printSection("LATEST ACTIVITY FROM ACTIVITY LIST");
-    printData("Latest activity", latest);
-
-    const activityId =
-      latest.id ??
-      latest.activityId ??
-      latest.workoutActivityId;
-
-    if (activityId) {
-      await test("LATEST ACTIVITY FULL DETAIL", () =>
-        client.getWorkoutActivityById(activityId)
-      );
-
-      await test("LATEST ACTIVITY FORMATTED SUMMARY", () =>
-        client.getFormattedWorkoutSummary(activityId)
-      );
-    } else {
-      console.log(
-        "[Tonal Client] Could not determine latest activity ID."
-      );
-    }
-  }
-
-  if (Array.isArray(strengthHistory) && strengthHistory.length > 0) {
-    printSection("STRENGTH HISTORY SUMMARY");
-
-    console.log(
-      `[Tonal Client] Strength history entries: ${strengthHistory.length}`
-    );
-
-    console.log("[Tonal Client] First strength history entry:");
-    console.log(JSON.stringify(strengthHistory[0], null, 2));
-
-    console.log("[Tonal Client] Last strength history entry:");
-    console.log(
-      JSON.stringify(
-        strengthHistory[strengthHistory.length - 1],
-        null,
-        2
-      )
-    );
-  }
-
-  printSection("DIAGNOSTIC COMPLETE");
+  await syncTonal(tonalClient);
 
   console.log(
-    "[Tonal Client] Diagnostics finished. Keeping app alive for log inspection."
+    `[Tonal Client] Sync interval: ${syncInterval} seconds`
   );
 
-  setInterval(() => {
-    // Keep the Home Assistant app running.
-  }, 60_000);
-
+  setInterval(
+    () => syncTonal(tonalClient),
+    syncInterval * 1000
+  );
 } catch (error) {
   console.error(
     "[Tonal Client] FATAL ERROR:",
