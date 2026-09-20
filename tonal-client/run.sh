@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/with-contenv bashio
 set -e
 
 echo "[Tonal Client] Starting..."
