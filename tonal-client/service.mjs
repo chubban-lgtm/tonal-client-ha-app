@@ -15,7 +15,8 @@ const options = JSON.parse(fs.readFileSync(optionsPath, "utf8"));
 
 const tonalEmail = options.tonal_email;
 const tonalPassword = options.tonal_password;
-const syncInterval = Number(options.sync_interval || 21600);\nconst workoutSyncInterval = Number(options.workout_sync_interval || 900);
+const syncInterval = Number(options.sync_interval || 21600);
+const workoutSyncInterval = Number(options.workout_sync_interval || 900);
 const githubToken = String(options.github_token || "").trim();
 const workoutRepo = String(options.workout_repo || "chubban-lgtm/toneget-workout-data").trim();
 const workoutBranch = String(options.workout_branch || "main").trim() || "main";
