@@ -1,5 +1,5 @@
 name: "Tonal Client"
-version: "0.2.0"
+version: "0.3.0"
 slug: "tonal_client"
 description: "Home Assistant app using dlwiest/ts-tonal-client"
 url: "https://github.com/chubban-lgtm/tonal-client-ha-app"
