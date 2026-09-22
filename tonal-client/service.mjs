@@ -301,6 +301,7 @@ function createWorkoutDataEntities() {
   numberSensor("arm_flexed", "Arm Flexed", { unit_of_measurement: "in", icon: "mdi:arm-flex" });
 
   publishDiscovery("manual_workout_date", { name: "Manual Workout Date", state_topic: "tonal_client/manual_workout_date/state", icon: "mdi:calendar-check" });
+  publishDiscovery("manual_latest_workout_muscles", { name: "Manual Latest Workout Muscles", state_topic: "tonal_client/manual_latest_workout_muscles/state", icon: "mdi:human-handsup" });
   publishDiscovery("arm_measurement_date", { name: "Arm Measurement Date", state_topic: "tonal_client/arm_measurement_date/state", icon: "mdi:calendar" });
   publishDiscovery("current_program", { name: "Current Program", state_topic: "tonal_client/current_program/state", icon: "mdi:clipboard-text-outline" });
   publishDiscovery("next_workout", { name: "Next Workout", state_topic: "tonal_client/next_workout/state", icon: "mdi:arrow-right-bold-circle-outline" });
@@ -418,6 +419,18 @@ async function syncWorkoutData() {
     if (Number.isFinite(legacyFreeLift)) publishState("combined_free_lift_workouts", legacyFreeLift + workouts.length);
 
     if (latestWorkout.date) publishState("manual_workout_date", latestWorkout.date);
+    const latestFocus = Array.isArray(latestWorkout.focus)
+      ? latestWorkout.focus
+          .filter((item) => String(item || "").trim())
+          .map((item) =>
+            String(item)
+              .trim()
+              .replace(/\b\w/g, (char) => char.toUpperCase())
+          )
+      : [];
+    if (latestFocus.length) {
+      publishState("manual_latest_workout_muscles", latestFocus.join(" • "));
+    }
     publishState("manual_latest_workout", latestWorkout.workout || latestWorkout.name || "Workout");
     publishAttributes("manual_latest_workout", { ...latestWorkout, calculated: latestSummary });
 
