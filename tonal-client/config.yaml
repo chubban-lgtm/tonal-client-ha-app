@@ -18,6 +18,7 @@ options:
   tonal_email: ""
   tonal_password: ""
   sync_interval: 21600
+  workout_sync_interval: 900
   github_token: ""
   workout_repo: "chubban-lgtm/toneget-workout-data"
   workout_branch: "main"
@@ -26,6 +27,7 @@ schema:
   tonal_email: str
   tonal_password: password
   sync_interval: "int(300,86400)"
+  workout_sync_interval: "int(300,86400)"
   github_token: password
   workout_repo: str
   workout_branch: str
