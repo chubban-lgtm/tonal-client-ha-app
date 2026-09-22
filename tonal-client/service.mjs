@@ -16,6 +16,9 @@ const options = JSON.parse(fs.readFileSync(optionsPath, "utf8"));
 const tonalEmail = options.tonal_email;
 const tonalPassword = options.tonal_password;
 const syncInterval = Number(options.sync_interval || 21600);
+const githubToken = String(options.github_token || "").trim();
+const workoutRepo = String(options.workout_repo || "chubban-lgtm/toneget-workout-data").trim();
+const workoutBranch = String(options.workout_branch || "main").trim() || "main";
 
 if (!tonalEmail || !tonalPassword) {
   console.error("[Tonal Client] ERROR: Tonal credentials are not configured.");
@@ -270,6 +273,55 @@ function sortActivitiesNewestFirst(activities) {
   });
 }
 
+function createWorkoutDataEntities() {
+  numberSensor("manual_workout_count", "Manual Workout Count", { icon: "mdi:counter" });
+  attributeSensor("manual_latest_workout", "Manual Latest Workout", { icon: "mdi:weight-lifter" });
+  numberSensor("arm_relaxed", "Arm Relaxed", { unit_of_measurement: "in", icon: "mdi:tape-measure" });
+  numberSensor("arm_flexed", "Arm Flexed", { unit_of_measurement: "in", icon: "mdi:arm-flex" });
+  attributeSensor("exercise_baselines", "Exercise Baselines", { icon: "mdi:dumbbell" });
+  publishDiscovery("manual_workout_date", { name: "Manual Workout Date", state_topic: "tonal_client/manual_workout_date/state", icon: "mdi:calendar-check" });
+  publishDiscovery("arm_measurement_date", { name: "Arm Measurement Date", state_topic: "tonal_client/arm_measurement_date/state", icon: "mdi:calendar" });
+  publishDiscovery("workout_data_last_sync", { name: "Workout Data Last Sync", state_topic: "tonal_client/workout_data_last_sync/state", device_class: "timestamp", icon: "mdi:github" });
+}
+
+async function githubJson(path) {
+  if (!githubToken || !workoutRepo) return null;
+  const url = `https://api.github.com/repos/${workoutRepo}/contents/${path}?ref=${encodeURIComponent(workoutBranch)}`;
+  const response = await fetch(url, { headers: { Accept: "application/vnd.github.raw+json", Authorization: `Bearer ${githubToken}`, "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Tonal-Client-HA" } });
+  if (!response.ok) throw new Error(`GitHub ${response.status} while reading ${path}`);
+  return response.json();
+}
+
+async function syncWorkoutData() {
+  if (!githubToken) {
+    console.log("[Tonal Client] Workout data sync disabled: GitHub token not configured.");
+    return;
+  }
+  try {
+    const [workoutsDoc, measurementsDoc, baselinesDoc] = await Promise.all([
+      githubJson("workout_data/workouts.json"), githubJson("workout_data/measurements.json"), githubJson("workout_data/exercise_baselines.json")
+    ]);
+    const workouts = Array.isArray(workoutsDoc?.workouts) ? workoutsDoc.workouts : [];
+    const measurements = Array.isArray(measurementsDoc?.measurements) ? measurementsDoc.measurements : [];
+    const baselines = Array.isArray(baselinesDoc?.exercises) ? baselinesDoc.exercises : [];
+    const latestWorkout = workouts.at(-1) || {};
+    const latestMeasurement = measurements.at(-1) || {};
+    publishState("manual_workout_count", workouts.length);
+    if (latestWorkout.date) publishState("manual_workout_date", latestWorkout.date);
+    publishState("manual_latest_workout", latestWorkout.workout || latestWorkout.name || "Workout");
+    publishAttributes("manual_latest_workout", latestWorkout);
+    publishState("arm_relaxed", latestMeasurement.arm_relaxed_in);
+    publishState("arm_flexed", latestMeasurement.arm_flexed_in);
+    if (latestMeasurement.date) publishState("arm_measurement_date", latestMeasurement.date);
+    publishState("exercise_baselines", baselines.length);
+    publishAttributes("exercise_baselines", { count: baselines.length, exercises: baselines });
+    publishState("workout_data_last_sync", new Date().toISOString());
+    console.log(`[Tonal Client] Private workout data sync complete — ${workouts.length} workouts, ${baselines.length} baselines.`);
+  } catch (error) {
+    console.error("[Tonal Client] Workout data sync ERROR:", error instanceof Error ? error.message : String(error));
+  }
+}
+
 function createEntities() {
   // Core strength
   numberSensor("strength_score", "Strength Score", {
@@ -464,6 +516,7 @@ function createEntities() {
     device: DEVICE
   });
 
+  createWorkoutDataEntities();
   console.log("[Tonal Client] Full MQTT Discovery map published.");
 }
 
@@ -926,6 +979,8 @@ async function syncTonal() {
     // --------------------------------------------------
     // Sync complete
     // --------------------------------------------------
+
+    await syncWorkoutData();
 
     const now = new Date().toISOString();
 
