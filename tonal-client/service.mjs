@@ -16,6 +16,7 @@ const options = JSON.parse(fs.readFileSync(optionsPath, "utf8"));
 const tonalEmail = options.tonal_email;
 const tonalPassword = options.tonal_password;
 const syncInterval = Number(options.sync_interval || 21600);
+const workoutSyncInterval = Number(options.workout_sync_interval || 900);
 const githubToken = String(options.github_token || "").trim();
 const workoutRepo = String(options.workout_repo || "chubban-lgtm/toneget-workout-data").trim();
 const workoutBranch = String(options.workout_branch || "main").trim() || "main";
@@ -275,13 +276,84 @@ function sortActivitiesNewestFirst(activities) {
 
 function createWorkoutDataEntities() {
   numberSensor("manual_workout_count", "Manual Workout Count", { icon: "mdi:counter" });
+  numberSensor("manual_total_volume", "Manual Total Volume", { unit_of_measurement: "lb", icon: "mdi:weight-pound" });
+  numberSensor("manual_total_sets", "Manual Total Sets", { icon: "mdi:counter" });
+  numberSensor("manual_total_reps", "Manual Total Reps", { icon: "mdi:repeat" });
+  numberSensor("manual_latest_workout_volume", "Manual Latest Workout Volume", { unit_of_measurement: "lb", icon: "mdi:weight-pound" });
+  numberSensor("manual_latest_workout_sets", "Manual Latest Workout Sets", { icon: "mdi:counter" });
+  numberSensor("manual_latest_workout_reps", "Manual Latest Workout Reps", { icon: "mdi:repeat" });
+  numberSensor("manual_latest_workout_movements", "Manual Latest Workout Movements", { icon: "mdi:weight-lifter" });
+
+  numberSensor("legacy_total_volume", "Legacy Tonal Volume", { unit_of_measurement: "lb", icon: "mdi:archive" });
+  numberSensor("combined_total_volume", "Combined Total Volume", { unit_of_measurement: "lb", icon: "mdi:weight-pound" });
+  numberSensor("legacy_total_workouts", "Legacy Tonal Workouts", { icon: "mdi:archive" });
+  numberSensor("combined_total_workouts", "Combined Total Workouts", { icon: "mdi:counter" });
+  numberSensor("combined_average_workout_volume", "Combined Average Workout Volume", { unit_of_measurement: "lb", icon: "mdi:chart-bar" });
+  numberSensor("combined_max_workout_volume", "Combined Max Workout Volume", { unit_of_measurement: "lb", icon: "mdi:trophy-outline" });
+  numberSensor("combined_free_lift_workouts", "Combined Free Lift Workouts", { icon: "mdi:dumbbell" });
+
   attributeSensor("manual_latest_workout", "Manual Latest Workout", { icon: "mdi:weight-lifter" });
+  attributeSensor("exercise_baselines", "Exercise Baselines", { icon: "mdi:dumbbell" });
+  attributeSensor("legacy_baseline", "Legacy Tonal Baseline", { icon: "mdi:archive-clock" });
+  attributeSensor("program_state", "Program State", { icon: "mdi:calendar-sync" });
+
   numberSensor("arm_relaxed", "Arm Relaxed", { unit_of_measurement: "in", icon: "mdi:tape-measure" });
   numberSensor("arm_flexed", "Arm Flexed", { unit_of_measurement: "in", icon: "mdi:arm-flex" });
-  attributeSensor("exercise_baselines", "Exercise Baselines", { icon: "mdi:dumbbell" });
+
   publishDiscovery("manual_workout_date", { name: "Manual Workout Date", state_topic: "tonal_client/manual_workout_date/state", icon: "mdi:calendar-check" });
   publishDiscovery("arm_measurement_date", { name: "Arm Measurement Date", state_topic: "tonal_client/arm_measurement_date/state", icon: "mdi:calendar" });
+  publishDiscovery("current_program", { name: "Current Program", state_topic: "tonal_client/current_program/state", icon: "mdi:clipboard-text-outline" });
+  publishDiscovery("next_workout", { name: "Next Workout", state_topic: "tonal_client/next_workout/state", icon: "mdi:arrow-right-bold-circle-outline" });
+  publishDiscovery("training_block", { name: "Training Block", state_topic: "tonal_client/training_block/state", icon: "mdi:calendar-range" });
   publishDiscovery("workout_data_last_sync", { name: "Workout Data Last Sync", state_topic: "tonal_client/workout_data_last_sync/state", device_class: "timestamp", icon: "mdi:github" });
+}
+
+function workoutSetVolume(exercise, set) {
+  const reps = Number(set?.reps);
+  if (!Number.isFinite(reps) || reps <= 0) return 0;
+
+  const total = Number(set?.weight_total);
+  if (Number.isFinite(total)) return total * reps;
+
+  const each = Number(set?.weight_each);
+  if (Number.isFinite(each)) {
+    const sides = Number.isFinite(Number(set?.sides)) ? Number(set.sides) : 2;
+    return each * reps * sides;
+  }
+
+  const weight = Number(set?.weight);
+  if (Number.isFinite(weight)) {
+    const unit = normalize(exercise?.unit);
+    const multiplier = unit.includes("each") ? 2 : 1;
+    return weight * reps * multiplier;
+  }
+
+  return 0;
+}
+
+function summarizeManualWorkout(workout) {
+  const exercises = Array.isArray(workout?.exercises) ? workout.exercises : [];
+  let volume = 0;
+  let sets = 0;
+  let reps = 0;
+
+  for (const exercise of exercises) {
+    const exerciseSets = Array.isArray(exercise?.sets) ? exercise.sets : [];
+    sets += exerciseSets.length;
+
+    for (const set of exerciseSets) {
+      const r = Number(set?.reps);
+      if (Number.isFinite(r)) reps += r;
+      volume += workoutSetVolume(exercise, set);
+    }
+  }
+
+  return {
+    volume_lb: round(volume),
+    sets,
+    reps,
+    movements: exercises.length
+  };
 }
 
 async function githubJson(path) {
@@ -298,25 +370,79 @@ async function syncWorkoutData() {
     return;
   }
   try {
-    const [workoutsDoc, measurementsDoc, baselinesDoc] = await Promise.all([
-      githubJson("workout_data/workouts.json"), githubJson("workout_data/measurements.json"), githubJson("workout_data/exercise_baselines.json")
+    const [workoutsDoc, measurementsDoc, baselinesDoc, legacyDoc, programDoc] = await Promise.all([
+      githubJson("workout_data/workouts.json"),
+      githubJson("workout_data/measurements.json"),
+      githubJson("workout_data/exercise_baselines.json"),
+      githubJson("workout_data/legacy_baseline.json"),
+      githubJson("workout_data/program_state.json")
     ]);
+
     const workouts = Array.isArray(workoutsDoc?.workouts) ? workoutsDoc.workouts : [];
     const measurements = Array.isArray(measurementsDoc?.measurements) ? measurementsDoc.measurements : [];
     const baselines = Array.isArray(baselinesDoc?.exercises) ? baselinesDoc.exercises : [];
     const latestWorkout = workouts.at(-1) || {};
     const latestMeasurement = measurements.at(-1) || {};
+
+    const manualSummaries = workouts.map(summarizeManualWorkout);
+    const manualTotalVolume = manualSummaries.reduce((sum, item) => sum + Number(item.volume_lb || 0), 0);
+    const manualTotalSets = manualSummaries.reduce((sum, item) => sum + Number(item.sets || 0), 0);
+    const manualTotalReps = manualSummaries.reduce((sum, item) => sum + Number(item.reps || 0), 0);
+    const latestSummary = manualSummaries.at(-1) || { volume_lb: 0, sets: 0, reps: 0, movements: 0 };
+
+    const legacyVolume = Number(legacyDoc?.lifetime?.total_volume_lb);
+    const legacyWorkouts = Number(legacyDoc?.lifetime?.total_workouts);
+    const legacyMaxWorkoutVolume = Number(legacyDoc?.records_and_averages?.max_workout_volume_lb);
+    const legacyFreeLift = Number(legacyDoc?.lifetime?.free_lift_workouts);
+
+    const combinedVolume = (Number.isFinite(legacyVolume) ? legacyVolume : 0) + manualTotalVolume;
+    const combinedWorkouts = (Number.isFinite(legacyWorkouts) ? legacyWorkouts : 0) + workouts.length;
+    const manualMaxWorkoutVolume = manualSummaries.reduce((max, item) => Math.max(max, Number(item.volume_lb || 0)), 0);
+    const combinedMaxWorkoutVolume = Math.max(Number.isFinite(legacyMaxWorkoutVolume) ? legacyMaxWorkoutVolume : 0, manualMaxWorkoutVolume);
+
     publishState("manual_workout_count", workouts.length);
+    publishState("manual_total_volume", round(manualTotalVolume));
+    publishState("manual_total_sets", manualTotalSets);
+    publishState("manual_total_reps", manualTotalReps);
+    publishState("manual_latest_workout_volume", latestSummary.volume_lb);
+    publishState("manual_latest_workout_sets", latestSummary.sets);
+    publishState("manual_latest_workout_reps", latestSummary.reps);
+    publishState("manual_latest_workout_movements", latestSummary.movements);
+
+    if (Number.isFinite(legacyVolume)) publishState("legacy_total_volume", legacyVolume);
+    if (Number.isFinite(legacyWorkouts)) publishState("legacy_total_workouts", legacyWorkouts);
+    publishState("combined_total_volume", round(combinedVolume));
+    publishState("combined_total_workouts", combinedWorkouts);
+    if (combinedWorkouts > 0) publishState("combined_average_workout_volume", round(combinedVolume / combinedWorkouts));
+    publishState("combined_max_workout_volume", round(combinedMaxWorkoutVolume));
+    if (Number.isFinite(legacyFreeLift)) publishState("combined_free_lift_workouts", legacyFreeLift + workouts.length);
+
     if (latestWorkout.date) publishState("manual_workout_date", latestWorkout.date);
     publishState("manual_latest_workout", latestWorkout.workout || latestWorkout.name || "Workout");
-    publishAttributes("manual_latest_workout", latestWorkout);
+    publishAttributes("manual_latest_workout", { ...latestWorkout, calculated: latestSummary });
+
     publishState("arm_relaxed", latestMeasurement.arm_relaxed_in);
     publishState("arm_flexed", latestMeasurement.arm_flexed_in);
     if (latestMeasurement.date) publishState("arm_measurement_date", latestMeasurement.date);
+
     publishState("exercise_baselines", baselines.length);
     publishAttributes("exercise_baselines", { count: baselines.length, exercises: baselines });
+
+    publishState("legacy_baseline", legacyDoc?.snapshot_date || "Tonal API");
+    publishAttributes("legacy_baseline", legacyDoc || {});
+
+    publishState("program_state", programDoc?.next_workout || programDoc?.program || "PPL A/B");
+    publishAttributes("program_state", programDoc || {});
+    if (programDoc?.program) publishState("current_program", programDoc.program);
+    if (programDoc?.next_workout) publishState("next_workout", programDoc.next_workout);
+    if (programDoc?.training_block?.name) publishState("training_block", programDoc.training_block.name);
+
     publishState("workout_data_last_sync", new Date().toISOString());
-    console.log(`[Tonal Client] Private workout data sync complete — ${workouts.length} workouts, ${baselines.length} baselines.`);
+    console.log(
+      `[Tonal Client] Private workout data sync complete — ${workouts.length} workouts, ` +
+      `${round(manualTotalVolume)} lb manual volume, ${round(combinedVolume)} lb combined volume, ` +
+      `${baselines.length} baselines.`
+    );
   } catch (error) {
     console.error("[Tonal Client] Workout data sync ERROR:", error instanceof Error ? error.message : String(error));
   }
@@ -980,8 +1106,6 @@ async function syncTonal() {
     // Sync complete
     // --------------------------------------------------
 
-    await syncWorkoutData();
-
     const now = new Date().toISOString();
 
     publishState("last_sync", now);
@@ -1017,6 +1141,8 @@ mqttClient.on("connect", async () => {
     ""
   );
 
+  await syncWorkoutData();
+
   if (tonalClient) {
     await syncTonal();
   }
@@ -1050,12 +1176,17 @@ try {
   }
 
   console.log(
-    `[Tonal Client] Automatic sync every ${syncInterval} seconds.`
+    `[Tonal Client] Tonal API sync every ${syncInterval} seconds; workout data sync every ${workoutSyncInterval} seconds.`
   );
 
   setInterval(
     () => syncTonal(),
     syncInterval * 1000
+  );
+
+  setInterval(
+    () => syncWorkoutData(),
+    workoutSyncInterval * 1000
   );
 } catch (error) {
   console.error(
