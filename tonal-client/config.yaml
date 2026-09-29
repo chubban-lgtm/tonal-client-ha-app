@@ -1,5 +1,5 @@
 name: "Tonal Client"
-version: "0.3.0"
+version: "0.3.1"
 slug: "tonal_client"
 description: "Home Assistant app using dlwiest/ts-tonal-client"
 url: "https://github.com/chubban-lgtm/tonal-client-ha-app"
@@ -22,6 +22,7 @@ options:
   github_token: ""
   workout_repo: "chubban-lgtm/toneget-workout-data"
   workout_branch: "main"
+  workout_timezone: "America/Chicago"
 
 schema:
   tonal_email: str
@@ -31,3 +32,4 @@ schema:
   github_token: password
   workout_repo: str
   workout_branch: str
+  workout_timezone: str
