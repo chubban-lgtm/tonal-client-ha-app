@@ -20,6 +20,7 @@ const workoutSyncInterval = Number(options.workout_sync_interval || 900);
 const githubToken = String(options.github_token || "").trim();
 const workoutRepo = String(options.workout_repo || "chubban-lgtm/toneget-workout-data").trim();
 const workoutBranch = String(options.workout_branch || "main").trim() || "main";
+const workoutTimezone = String(options.workout_timezone || "America/Chicago").trim() || "America/Chicago";
 
 if (!tonalEmail || !tonalPassword) {
   console.error("[Tonal Client] ERROR: Tonal credentials are not configured.");
@@ -365,6 +366,48 @@ async function githubJson(path) {
   return response.json();
 }
 
+function dateInTimezone(timeZone) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(new Date());
+    const get = (type) => parts.find((part) => part.type === type)?.value;
+    return `${get("year")}-${get("month")}-${get("day")}`;
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+function calendarDaysBetween(fromDate, toDate) {
+  const from = Date.parse(`${fromDate}T00:00:00Z`);
+  const to = Date.parse(`${toDate}T00:00:00Z`);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return 0;
+  return Math.floor((to - from) / 86400000);
+}
+
+function effectiveNextWorkout(programDoc, latestWorkout) {
+  const storedNext = String(programDoc?.next_workout || "").trim();
+  if (storedNext !== "Recovery" || !latestWorkout?.date) return storedNext;
+
+  const today = dateInTimezone(workoutTimezone);
+  const daysSinceWorkout = calendarDaysBetween(latestWorkout.date, today);
+
+  // The calendar day immediately after Legs B is the recovery day.
+  // After that day has passed, advance the displayed next workout past
+  // Recovery without requiring a fake recovery workout/commit.
+  if (daysSinceWorkout <= 1) return "Recovery";
+
+  const rotation = Array.isArray(programDoc?.rotation) ? programDoc.rotation : [];
+  const recoveryIndex = rotation.indexOf("Recovery");
+  if (recoveryIndex >= 0 && rotation.length > 1) {
+    return rotation[(recoveryIndex + 1) % rotation.length] || storedNext;
+  }
+  return "Pull A";
+}
+
 async function syncWorkoutData() {
   if (!githubToken) {
     console.log("[Tonal Client] Workout data sync disabled: GitHub token not configured.");
@@ -444,10 +487,11 @@ async function syncWorkoutData() {
     publishState("legacy_baseline", legacyDoc?.snapshot_date || "Tonal API");
     publishAttributes("legacy_baseline", legacyDoc || {});
 
-    publishState("program_state", programDoc?.next_workout || programDoc?.program || "PPL A/B");
-    publishAttributes("program_state", programDoc || {});
+    const displayedNextWorkout = effectiveNextWorkout(programDoc, latestWorkout);
+    publishState("program_state", displayedNextWorkout || programDoc?.program || "PPL A/B");
+    publishAttributes("program_state", { ...programDoc, effective_next_workout: displayedNextWorkout, workout_timezone: workoutTimezone });
     if (programDoc?.program) publishState("current_program", programDoc.program);
-    if (programDoc?.next_workout) publishState("next_workout", programDoc.next_workout);
+    if (displayedNextWorkout) publishState("next_workout", displayedNextWorkout);
     if (programDoc?.training_block?.name) publishState("training_block", programDoc.training_block.name);
 
     publishState("workout_data_last_sync", new Date().toISOString());
